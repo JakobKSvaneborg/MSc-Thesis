@@ -127,7 +127,7 @@ class timescale:
             self.f_H = lambda t : (H + Delta*Vbias(t))
         if Vbias_dT is None: #Vbias_dT may be optionally specifieself. If it is not, it is calculated here w/ finite difference.
             if np.all(Delta == 0):
-                Vbias_dT = lambda t : 0
+                Vbias_dT = lambda t : np.zeros(np.array(t).shape)
             else:
                 Vbias_dT = lambda t : self.FD(Vbias,t) #numerical derivative w/ finite difference
         self.H_dT = Delta*Vbias_dT(T)
