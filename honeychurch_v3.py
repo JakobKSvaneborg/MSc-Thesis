@@ -744,9 +744,12 @@ class timescale:
         #w=omega
         #dw_taumax = 2*np.(Tmax - Tmin)
         #Calculate range of integration needed for sufficiently fine tau sampling (dt = 2pi/(b-a)) and nyquist: 1/dt > 2*max freq
-        V_min = self.V_min
-        V_max = self.V_max
+        V_max = np.abs(Delta_alpha)*self.V_max
+        V_min = np.abs(Delta_alpha)*self.V_min
         max_freq = V_max - V_min
+        if max_freq==0:
+            max_freq = 0.1
+        dtau_max = 1/(2.1*max_freq)
         dtau_max = 1/(2*max_freq)
         min_domain_length = 2*np.pi/dtau_max
         domain_length = max(w.max()-w.min(), min_domain_length) #We should at least include the entire range [omega_min, omega_max].
