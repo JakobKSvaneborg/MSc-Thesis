@@ -1163,6 +1163,8 @@ class timescale:
         if side =='left': 
             return J0_L, J1_L
         elif side=='right':
-
+            return J0_R, J1_R
+        elif side=='both':
+            return [J0_L,J1_L],[J0_R,J1_R]
 
 ####################################### end class
