@@ -119,8 +119,8 @@ class timescale:
         self.Delta_L = Delta_L 
         self.Delta_R = Delta_R 
         self.Delta = Delta
-        self.Vmax = np.max(Vbias(T))
-        self.Vmin = np.min(Vbias(T))
+        self.V_max = np.max(Vbias(T))
+        self.V_min = np.min(Vbias(T))
         T=np.array(T).reshape(-1,1,1,1)
         self.T=T
         if H is not None:
@@ -141,6 +141,9 @@ class timescale:
             Fermi_poles, Fermi_res = Fermi_params
             self.Fermi_params_L = [Fermi_poles + mu_L,Fermi_res]
             self.Fermi_params_R = [Fermi_poles + mu_R,Fermi_res]
+        else:
+            self.Fermi_params_L = []
+            self.Fermi_params_R = [] #make sure these are specified.
         self.Lorentz_params_L = Lorentz_params_L
         self.Lorentz_params_R = Lorentz_params_R
 
