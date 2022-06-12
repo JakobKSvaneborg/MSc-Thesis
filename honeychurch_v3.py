@@ -102,16 +102,21 @@ class timescale:
         
         dev_dim = np.shape(Delta)[-1]
         self.device_dim = dev_dim
-        self.Gamma_L = Gamma_L
-        self.Gamma_R = Gamma_R
         if callable(Gamma_L):
             self.WBL_L = False
         else:
             self.WBL_L = True
+            self.coupling_index_L = (Gamma_L != 0)
+            Gamma_L = Gamma_L.reshape(1,1,dev_dim,dev_dim)
         if callable(Gamma_R):
             self.WBL_R = False
         else:
             self.WBL_R = True
+            self.coupling_index_R = (Gamma_R != 0)
+            Gamma_R = Gamma_R.reshape(1,1,dev_dim,dev_dim)
+
+        self.Gamma_L = Gamma_L
+        self.Gamma_R = Gamma_R
 
         self.Temperature = Temperature 
         self.mu_L = mu_L 
@@ -589,6 +594,7 @@ class timescale:
             Fermi_params = self.Fermi_params_L
             coupling_index = self.coupling_index_L
             Delta_alpha = self.Delta_L
+            WBL_check = self.WBL_L
         else:
             f = self.f_R
             Gamma = self.Gamma_R
@@ -597,9 +603,13 @@ class timescale:
             Fermi_params = self.Fermi_params_R
             coupling_index = self.coupling_index_R
             Delta_alpha = self.Delta_R
-        if not callable(Gamma): #make gamma callable even in the WBL to make the syntax the same in every case.
+            WBL_check = self.WBL_R
+        if WBL_check: #we are in the wide-band limit. For sigma_less, we just continue the calculation. 
             Gamma_mat = Gamma
-            Gamma = lambda x : Gamma_mat
+            Gamma = lambda x : np.ones(x.shape)*Gamma_mat
+        if not callable(Gamma): #make gamma callable even in the WBL to make the syntax the same in every case.
+            print('error in calc_Sigma_less: Gamma was not callable, but WBL was not specified!')
+            assert 1==0
             #print('WBL! Gamma was not callable')
 
         T=np.array(T).reshape(-1,1,1,1)
@@ -702,6 +712,7 @@ class timescale:
 
 
     def calc_Sigma_R(self,T=None,omega=None,alpha='L',extension_length=300): #new one
+        
         if np.all(T==None):
             T=self.T
             #print('calc_Sigma_less: set T = self.T',flush=True)
@@ -717,15 +728,20 @@ class timescale:
             Lorentz_params = self.Lorentz_params_L
             coupling_index = self.coupling_index_L
             Delta_alpha = self.Delta_L
+            WBL_check = self.WBL_L
         else:
             Gamma = self.Gamma_R
             potential = self.potential_R
             Lorentz_params = self.Lorentz_params_R
             coupling_index = self.coupling_index_R
             Delta_alpha = self.Delta_R
+            WBL_check = self.WBL_R
+        if WBL_check: #we are in the WBL! functional form of Sigma is known. Gamma should be a matrix, not a function
+            return -1j*np.ones(np.shape(T*omega))*Gamma/2
         if not callable(Gamma): #make gamma callable even in the WBL to make the syntax the same in every case.
-            Gamma_mat = Gamma
-            Gamma = lambda x : Gamma_mat
+            #Gamma_mat = Gamma
+            print('error in calc_Sigma_R: Gamma must be a function, or WBL must be specified!')
+            #Gamma = lambda x : Gamma_mat
             #print('WBL! Gamma was not callable')
 
         T=np.array(T).reshape(-1,1,1,1)
@@ -811,7 +827,9 @@ class timescale:
                         #print('Sigma_R_backward_shape',Sigma_R_backward.shape)
                         Sigma_R[:,:,i,j] =   Sigma_R_backward - expPhi*(1j*Gam[:,omega_index,i,j]/2 - 1/2*self.hilbert(Gam[:,omega_index,i,j],axis=1))#
         return Sigma_R
+    
 
+    """ #deprecated
     def calc_Sigma(self,T=None,omega=None):
         if T is None:
             T = self.T
@@ -849,18 +867,14 @@ class timescale:
         self.Sigma_less  = Sigma_less  
         
         return [Sigma_L_R,Sigma_R_R,Sigma_L_less,Sigma_R_less]
+    """
 
 
 
 
-    def calc_density(self):
-        if np.all(self.G0_less==0):
-            self.calc_current()
-        density = np.sum(self.omega_weights*np.imag(self.G0_less+self.G1_less),axis=1)/(2*np.pi)
-        return density
-
-
-    def calc_current(self,T=None,omega=None,side='left'):
+    def calc_current(self,T=None,omega=None,side='left',eta=0,calc_density=False,save_arrays='none'):
+        #save_arrays specifies whether to save the internal arrays. Currently just set to save the Green's functions and current matrices. 
+        #save_arrays may be set to 'all', 'diag' or 'none' depending on whether you want to save the entire arrays, their diagonals, or not at all
         deriv = self.FD
         if T is None:
             T = self.T
@@ -882,11 +896,27 @@ class timescale:
         J1_L = np.zeros(len(T))
         J0_R = np.zeros(len(T))
         J1_R = np.zeros(len(T))
-        G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        Pi0_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+        if calc_density:
+            density0 = np.zeros((np.size(T),self.device_dim,self.device_dim),dtype=np.complex128)
+            density1 = np.zeros((np.size(T),self.device_dim,self.device_dim),dtype=np.complex128)
+        if save_arrays=='all':
+            G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi0_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi1_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+        elif save_arrays=='diag':
+            G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi0_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi1_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
         for i in range(len(T)):
             print('loop %d/%d'%(i+1,len(T)),flush=True)
             t=T[i].reshape(1,1,1,1)
@@ -938,18 +968,18 @@ class timescale:
             H_dT = self.H_dT[i]
 
 
-            G0_R = inv(omega*np.identity(self.device_dim) - H - Sigma_R)
-            G0_R_array[i] = G0_R
+            G0_R = inv((omega+1j*eta)*np.identity(self.device_dim) - H - Sigma_R)
+            
             G0_A = np.conjugate(G0_R)
             G0_less = G0_R@Sigma_less@G0_A
-            G0_less_array[i] = G0_less
+
             #G0_great = G0_R - G0_A + G0_less
 
             #print('calculated G0',flush=True)
             #Current matrices - zero order. Eq (35)
             if side=='left' or side=='both':
                 Pi0_L = G0_less@Sigma_L_A + G0_R@Sigma_L_less
-                Pi0_L_array[i] = Pi0_L
+                
 
                 #The integral over omega is calculated as the vector product with the gauss-legendre weights. Eq (34)
                 J0_L[i] = 1/np.pi * np.sum(np.trace(np.real(Pi0_L)*omega_weights,axis1=2,axis2=3),axis=1)
@@ -974,13 +1004,13 @@ class timescale:
 
             #First order green functions. Eqs (28) and (32)
             G1_R =  1j/2 * G0_R @  (-G0_R_dT - H_dT@G0_R_dw - Sigma_R_dT@G0_R_dw + Sigma_R_dw @ G0_R_dT)
-            G1_R_array[i] = G1_R
+
             G1_A =  1j/2 * G0_A @  (-G0_A_dT - H_dT@G0_A_dw - Sigma_A_dT@G0_A_dw + Sigma_A_dw @ G0_A_dT)
 
             G1_less = G0_R@Sigma_less@G1_A + 1j/2*G0_R@(
                         -G0_less_dT - H_dT @ G0_less_dw - Sigma_less_dT@G0_A_dw + Sigma_less_dw@G0_A_dT - Sigma_R_dT@G0_less_dw + Sigma_R_dw@G0_less_dT
                         )
-            G1_less_array[i] = G1_less
+
             #print('calculated G1',flush=True)
             #First order current matrices
             if side=='left' or side=='both':
@@ -990,11 +1020,49 @@ class timescale:
             if side=='right' or side=='both':
                 Pi1_R = G1_less@Sigma_R_A + G1_R@Sigma_R_less - 1j/2 * G0_less_dT@Sigma_R_A_dw + 1j/2*G0_less_dw@Sigma_R_A_dT -1j/2*G0_R_dT@Sigma_R_less_dw + 1j/2*G0_R_dw@Sigma_R_less_dT
                 J1_R[i] = 1/np.pi * np.sum(np.trace(np.real(Pi1_R)*omega_weights,axis1=2,axis2=3),axis=1)
-        self.G0_R = G0_R_array
-        self.G0_less = G0_less_array
-        self.G1_R = G1_R_array
-        self.G1_less = G1_less_array
-        self.Pi0_L = Pi0_L_array
+
+            if calc_density:
+                density0[i]=np.sum(self.omega_weights*np.imag(G0_less),axis=1)/(2*np.pi) 
+                density1[i]=np.sum(self.omega_weights*np.imag(G1_less),axis=1)/(2*np.pi) 
+            if save_arrays == 'all':
+                G0_R_array[i] = G0_R
+                G0_less_array[i] = G0_less
+                G1_R_array[i] = G1_R
+                G1_less_array[i] = G1_less
+                if side=='left' or side=='both':
+                    Pi0_L_array[i] = Pi0_L
+                    Pi1_L_array[i] = Pi1_L
+                if side=='right' or side=='both':
+                    Pi0_R_array[i] = Pi0_R
+                    Pi1_R_array[i] = Pi1_R
+            elif save_arrays== 'diag':
+                G0_R_array[i] = np.diagonal(G0_R,axis1=2,axis2=3)
+                G0_less_array[i] = np.diagonal(G0_less,axis1=2,axis2=3)
+                G1_R_array[i] = np.diagonal(G1_R,axis1=2,axis2=3)
+                G1_less_array[i] = np.diagonal(G1_less,axis1=2,axis2=3)
+                if side=='left' or side=='both':
+                    Pi0_L_array[i] = np.diagonal(Pi0_L,axis1=2,axis2=3)
+                    Pi1_L_array[i] = np.diagonal(Pi1_L,axis1=2,axis2=3)
+                if side=='right' or side=='both':
+                    Pi0_R_array[i] = np.diagonal(Pi0_R,axis1=2,axis2=3)
+                    Pi1_R_array[i] = np.diagonal(Pi1_R,axis1=2,axis2=3)
+
+
+        if calc_density:
+            self.density0 = density0
+            self.density1 = density1
+        if save_arrays == 'all' or save_arrays == 'diag':
+            self.G0_R = G0_R_array
+            self.G0_less = G0_less_array
+            self.G1_R = G1_R_array
+            self.G1_less = G1_less_array
+            if side=='left' or side=='both':
+                self.Pi0_L = Pi0_L_array
+                self.Pi1_L = Pi1_L_array
+            if side=='right' or side=='both':
+                self.Pi0_R = Pi0_R_array
+                self.Pi1_R = Pi1_R_array
+            
         if side =='left': 
             return J0_L, J1_L
         elif side=='right':
@@ -1002,10 +1070,11 @@ class timescale:
         elif side=='both':
             return [J0_L,J1_L],[J0_R,J1_R]
 
-    def calc_current_ac(self,Omega,T=None,omega=None,side='left',N_bessel_functions=50):
+    def calc_current_ac(self,Omega,T=None,omega=None,side='left',eta=0,calc_density=False,save_arrays='none',N_bessel_functions=50):
         #deriv = self.FD
         if T is None:
             T = self.T
+        T=np.array(T).reshape(-1,1,1,1)
         if omega is None:
             omega = self.omega
             omega_weights = self.omega_weights
@@ -1020,51 +1089,77 @@ class timescale:
         J1_L = np.zeros(len(T))
         J0_R = np.zeros(len(T))
         J1_R = np.zeros(len(T))
-        G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+        if calc_density:
+            density0 = np.zeros((np.size(T),self.device_dim,self.device_dim),dtype=np.complex128)
+            density1 = np.zeros((np.size(T),self.device_dim,self.device_dim),dtype=np.complex128)
+        if save_arrays=='all':
+            G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi0_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi1_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+            Pi1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
+        elif save_arrays=='diag':
+            G0_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G1_less_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            G1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi0_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi0_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi1_L_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
+            Pi1_R_array = np.zeros((np.size(T),np.size(omega),self.device_dim),dtype=np.complex128)
 
         #Get poles and residues
-        Lor_poles_L,Lor_res_L = self.Lorentz_params_L
-        Lor_poles_R,Lor_res_R = self.Lorentz_params_R
-        Fermi_poles_L, Fermi_res_L = self.Fermi_params_L
-        Fermi_poles_R, Fermi_res_R = self.Fermi_params_R
+        
+        
         dim = self.device_dim
         Fermi_pade = self.Fermi_pade
-        Fermi_poles_L = Fermi_poles_L.reshape(-1,1,1)
-        Fermi_res_L = Fermi_res_L.reshape(-1,1,1)
-        Fermi_poles_R = Fermi_poles_R.reshape(-1,1,1)
-        Fermi_res_R = Fermi_res_R.reshape(-1,1,1)
-        chi_poles_L = np.concatenate((Fermi_poles_L,Lor_poles_L))
-        chi_res_L = np.concatenate((self.Gamma_L(Fermi_poles_L)*Fermi_res_L,Fermi_pade(Lor_poles_L,alpha='L')*Lor_res_L))
-        #chi_res_L = np.concatenate((self.Gamma_L(Fermi_poles)*Fermi_res,f_L(Lor_poles_L)*Lor_res_L))
-        chi_poles_R = np.concatenate((Fermi_poles_R,Lor_poles_R))
-        chi_res_R = np.concatenate((self.Gamma_R(Fermi_poles_R)*Fermi_res_R,Fermi_pade(Lor_poles_R,alpha='R')*Lor_res_R))
-        #chi_res_R = np.concatenate((self.Gamma_R(Fermi_poles)*Fermi_res,f_R(Lor_poles_R)*Lor_res_R))
-        chi_poles_L = chi_poles_L.reshape(-1,1,1,1,1)
-        chi_res_L = chi_res_L.reshape(-1,1,1,dim,dim)
-        chi_poles_R = chi_poles_R.reshape(-1,1,1,1,1)
-        chi_res_R = chi_res_R.reshape(-1,1,1,dim,dim)
-        LHP = (Lor_poles_L.imag < 0).flatten()  #get indices for poles in lower half plane
-        Lor_poles_L_LHP = Lor_poles_L[LHP]
-        Lor_res_L_LHP = Lor_res_L[LHP]
-        LHP_R = (Lor_poles_R.imag < 0).flatten()  #get indices for poles in lower half plane
-        Lor_poles_R_LHP = Lor_poles_R[LHP_R]
-        Lor_res_R_LHP = Lor_res_R[LHP_R]
-        Lor_poles_L_LHP = Lor_poles_L_LHP.reshape(-1,1,1,1,1)
-        Lor_res_L_LHP = Lor_res_L_LHP.reshape(-1,1,1,dim,dim)
-        Lor_poles_R_LHP = Lor_poles_R_LHP.reshape(-1,1,1,1,1)
-        Lor_res_R_LHP = Lor_res_R_LHP.reshape(-1,1,1,dim,dim)
+        if self.WBL_L:
+            pass
+        else:
+            Lor_poles_L,Lor_res_L = self.Lorentz_params_L
+            Fermi_poles_L, Fermi_res_L = self.Fermi_params_L
+            Fermi_poles_L = Fermi_poles_L.reshape(-1,1,1)
+            Fermi_res_L = Fermi_res_L.reshape(-1,1,1)
+            chi_poles_L = np.concatenate((Fermi_poles_L,Lor_poles_L))
+            chi_res_L = np.concatenate((self.Gamma_L(Fermi_poles_L)*Fermi_res_L,Fermi_pade(Lor_poles_L,alpha='L')*Lor_res_L))
+            #chi_res_L = np.concatenate((self.Gamma_L(Fermi_poles)*Fermi_res,f_L(Lor_poles_L)*Lor_res_L))
+            chi_poles_L = chi_poles_L.reshape(-1,1,1,1,1)
+            chi_res_L = chi_res_L.reshape(-1,1,1,dim,dim)
+            LHP = (Lor_poles_L.imag < 0).flatten()  #get indices for poles in lower half plane
+            Lor_poles_L_LHP = Lor_poles_L[LHP]
+            Lor_res_L_LHP = Lor_res_L[LHP]
+            Lor_poles_L_LHP = Lor_poles_L_LHP.reshape(-1,1,1,1,1)
+            Lor_res_L_LHP = Lor_res_L_LHP.reshape(-1,1,1,dim,dim)
+        if self.WBL_R:
+            pass
+        else:
+            Lor_poles_R,Lor_res_R = self.Lorentz_params_R
+            Fermi_poles_R, Fermi_res_R = self.Fermi_params_R
+            Fermi_poles_R = Fermi_poles_R.reshape(-1,1,1)
+            Fermi_res_R = Fermi_res_R.reshape(-1,1,1)
+            chi_poles_R = np.concatenate((Fermi_poles_R,Lor_poles_R))
+            chi_res_R = np.concatenate((self.Gamma_R(Fermi_poles_R)*Fermi_res_R,Fermi_pade(Lor_poles_R,alpha='R')*Lor_res_R))
+            #chi_res_R = np.concatenate((self.Gamma_R(Fermi_poles)*Fermi_res,f_R(Lor_poles_R)*Lor_res_R))
+            chi_poles_R = chi_poles_R.reshape(-1,1,1,1,1)
+            chi_res_R = chi_res_R.reshape(-1,1,1,dim,dim)
+            LHP_R = (Lor_poles_R.imag < 0).flatten()  #get indices for poles in lower half plane
+            Lor_poles_R_LHP = Lor_poles_R[LHP_R]
+            Lor_res_R_LHP = Lor_res_R[LHP_R]
+            Lor_poles_R_LHP = Lor_poles_R_LHP.reshape(-1,1,1,1,1)
+            Lor_res_R_LHP = Lor_res_R_LHP.reshape(-1,1,1,dim,dim)
         ###
         for i in range(len(T)):
+            print('loop %d/%d'%(i+1,len(T)),flush=True)
             t = T[i].reshape(1,1,1,1)
             H =  self.H[i]
             H_dT = self.H_dT[i]
             Psi_L = 2*self.Delta_L/Omega*np.cos(Omega*t)
             Psi_R = 2*self.Delta_R/Omega*np.cos(Omega*t)
-            Psi_L_dT = -2*Delta_L *np.sin(Omega*t)
-            Psi_R_dT = -2*Delta_R *np.sin(Omega*t)
+            Psi_L_dT = -2*self.Delta_L *np.sin(Omega*t)
+            Psi_R_dT = -2*self.Delta_R *np.sin(Omega*t)
 
             Sigma_L_R = 0
             Sigma_R_R = 0
@@ -1078,20 +1173,43 @@ class timescale:
             Sigma_R_R_dw = 0
             Sigma_L_less_dw = 0
             Sigma_R_less_dw = 0
-            for n in range(-N_bessel_functions,N_bessel_functions+1):
-                Sigma_L_R = Sigma_L_R + -1j*(-1)**n * jv(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP),axis=0)
-                Sigma_R_R = Sigma_R_R + -1j*(-1)**n * jv(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP),axis=0)
-                Sigma_L_less = Sigma_L_less + 1j*(-1)**n * jv(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L),axis=0)
-                Sigma_R_less = Sigma_R_less + 1j*(-1)**n * jv(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R),axis=0) 
-                Sigma_L_R_dT = Sigma_L_R_dT + -1j*(-1)**n * Psi_L_dT*jvp(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP),axis=0)
-                Sigma_R_R_dT = Sigma_R_R_dT + -1j*(-1)**n * Psi_R_dT*jvp(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP),axis=0)
-                Sigma_L_less_dT = Sigma_L_less_dT + 1j*(-1)**n * Psi_L_dT*jvp(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L),axis=0)
-                Sigma_R_less_dT = Sigma_R_less_dT + 1j*(-1)**n * Psi_R_dT*jvp(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R),axis=0) 
-                Sigma_L_R_dw = Sigma_L_R_dw + 1j*(-1)**n * jv(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP)**2,axis=0) 
-                Sigma_R_R_dw = Sigma_R_R_dw + 1j*(-1)**n * jv(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP)**2,axis=0)
-                Sigma_L_less_dw = Sigma_L_less_dw - 1j*(-1)**n * jv(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L)**2,axis=0)
-                Sigma_R_less_dw = Sigma_R_less_dw - 1j*(-1)**n * jv(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R)**2,axis=0) 
+            if self.WBL_L:
+                Sigma_L_R = self.calc_Sigma_R(t,omega,alpha='L')
+                Sigma_L_R_dw = np.zeros(Sigma_L_R.shape)
+                Sigma_L_R_dT = np.zeros(Sigma_L_R.shape)
+                for n in range(-N_bessel_functions,N_bessel_functions+1):    
+                    Sigma_L_less = Sigma_L_less +  1j*(-1)**n * jv(n,Psi_L) * self.f_L(omega+n*Omega/2) * self.Gamma_L
+                    Sigma_L_less_dT = Sigma_L_less_dT +  1j*(-1)**n * Psi_L_dT * jvp(n,Psi_L) * self.f_L(omega+n*Omega/2) * self.Gamma_L
+                    f_L_dw = -self.f_L(omega+n*Omega/2)**2/self.Temperature  * self.exp((omega+n*Omega/2 - self.mu_L)/self.Temperature)
+                    Sigma_L_less_dw = Sigma_L_less_dw +  1j*(-1)**n * jv(n,Psi_L) * f_L_dw * self.Gamma_L
+            else:
+                for n in range(-N_bessel_functions,N_bessel_functions+1):
+                    Sigma_L_R = Sigma_L_R + -1j*(-1)**n * jv(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP),axis=0)
+                    Sigma_L_less = Sigma_L_less + 1j*(-1)**n * jv(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L),axis=0)
+                    Sigma_L_R_dT = Sigma_L_R_dT + -1j*(-1)**n * Psi_L_dT*jvp(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP),axis=0)
+                    Sigma_L_less_dT = Sigma_L_less_dT + 1j*(-1)**n * Psi_L_dT*jvp(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L),axis=0)
+                    Sigma_L_R_dw = Sigma_L_R_dw + 1j*(-1)**n * jv(n,Psi_L) * np.sum(Lor_res_L_LHP/(omega + n*Omega/2 - Lor_poles_L_LHP)**2,axis=0) 
+                    Sigma_L_less_dw = Sigma_L_less_dw - 1j*(-1)**n * jv(n,Psi_L) * np.sum(chi_res_L/(omega + n*Omega/2 - chi_poles_L)**2,axis=0)                
+                    
+                    
 
+            if self.WBL_R:
+                Sigma_R_R = self.calc_Sigma_R(t,omega,alpha='R')
+                Sigma_R_R_dw = np.zeros(Sigma_R_R.shape)
+                Sigma_R_R_dT = np.zeros(Sigma_R_R.shape)
+                for n in range(-N_bessel_functions,N_bessel_functions+1):    
+                    Sigma_R_less = Sigma_R_less +  1j*(-1)**n * jv(n,Psi_R) * self.f_R(omega+n*Omega/2) * self.Gamma_R
+                    Sigma_R_less_dT = Sigma_R_less_dT +  1j*(-1)**n * Psi_R_dT * jvp(n,Psi_R) * self.f_R(omega+n*Omega/2) * self.Gamma_R
+                    f_R_dw = -self.f_R(omega+n*Omega/2)**2/self.Temperature  * self.exp((omega+n*Omega/2 - self.mu_R)/self.Temperature)
+                    Sigma_R_less_dw = Sigma_R_less_dw +  1j*(-1)**n * jv(n,Psi_R) * f_R_dw * self.Gamma_R
+            else:
+                for n in range(-N_bessel_functions,N_bessel_functions+1):
+                    Sigma_R_R = Sigma_R_R + -1j*(-1)**n * jv(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP),axis=0)
+                    Sigma_R_less = Sigma_R_less + 1j*(-1)**n * jv(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R),axis=0) 
+                    Sigma_R_R_dT = Sigma_R_R_dT + -1j*(-1)**n * Psi_R_dT*jvp(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP),axis=0)
+                    Sigma_R_less_dT = Sigma_R_less_dT + 1j*(-1)**n * Psi_R_dT*jvp(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R),axis=0) 
+                    Sigma_R_R_dw = Sigma_R_R_dw + 1j*(-1)**n * jv(n,Psi_R) * np.sum(Lor_res_R_LHP/(omega + n*Omega/2 - Lor_poles_R_LHP)**2,axis=0)                
+                    Sigma_R_less_dw = Sigma_R_less_dw - 1j*(-1)**n * jv(n,Psi_R) * np.sum(chi_res_R/(omega + n*Omega/2 - chi_poles_R)**2,axis=0) 
             Sigma_L_A = np.conjugate(Sigma_L_R)
             Sigma_R_A = np.conjugate(Sigma_R_R)
             Sigma_R = Sigma_L_R + Sigma_R_R
@@ -1113,29 +1231,32 @@ class timescale:
             Sigma_A_dw=  Sigma_R_A_dw + Sigma_L_A_dw
 
 
-            G0_R = inv(omega*np.identity(self.device_dim) - H - Sigma_R)
-            G0_R_array[i] = G0_R
+            H =  self.H[i]
+            H_dT = self.H_dT[i]
+
+
+            G0_R = inv((omega+1j*eta)*np.identity(self.device_dim) - H - Sigma_R)
+            
             G0_A = np.conjugate(G0_R)
             G0_less = G0_R@Sigma_less@G0_A
-            G0_less_array[i] = G0_less
             #G0_great = G0_R - G0_A + G0_less
 
             #print('calculated G0',flush=True)
             #Current matrices - zero order. Eq (35)
-            Pi0_L = G0_less@Sigma_L_A + G0_R@Sigma_L_less
+            if side=='left' or side=='both':
+                Pi0_L = G0_less@Sigma_L_A + G0_R@Sigma_L_less
+                
+
+                #The integral over omega is calculated as the vector product with the gauss-legendre weights. Eq (34)
+                J0_L[i] = 1/np.pi * np.sum(np.trace(np.real(Pi0_L)*omega_weights,axis1=2,axis2=3),axis=1)
 
 
-            #The integral over omega is calculated as the vector product with the gauss-legendre weights. Eq (34)
-            J0_L[i] = 1/np.pi * np.sum(np.trace(np.real(Pi0_L)*omega_weights,axis1=2,axis2=3),axis=1)
+            if side=='right' or side=='both':
+                Pi0_R = G0_less@Sigma_R_A + G0_R@Sigma_R_less
+                J0_R[i] = 1/np.pi * np.sum(np.trace(np.real(Pi0_R)*omega_weights,axis1=2,axis2=3),axis=1)
+            
 
-
-            #del(Pi0_L)
-            Pi0_R = G0_less@Sigma_R_A + G0_R@Sigma_R_less
-            J0_R[i] = 1/np.pi * np.sum(np.trace(np.real(Pi0_R)*omega_weights,axis1=2,axis2=3),axis=1)
-            #del(Pi0_R)
-            #print('calculated J0',flush=True)
             #FIRST ORDER
-
             #green function derivatives. Eqs (30), (29), (31)
             G0_R_dT = G0_R @ (H_dT+Sigma_R_dT)@G0_R
             G0_A_dT = np.conjugate(G0_R_dT)
@@ -1145,27 +1266,66 @@ class timescale:
 
             G0_less_dT = G0_R_dT@Sigma_less@G0_A + G0_R@Sigma_less@G0_A_dT + G0_R@Sigma_less_dT@G0_A
             G0_less_dw = G0_R_dw@Sigma_less@G0_A + G0_R@Sigma_less@G0_A_dw + G0_R@Sigma_less_dw@G0_A
-
             #First order green functions. Eqs (28) and (32)
             G1_R =  1j/2 * G0_R @  (-G0_R_dT - H_dT@G0_R_dw - Sigma_R_dT@G0_R_dw + Sigma_R_dw @ G0_R_dT)
-            G1_R_array[i] = G1_R
+
             G1_A =  1j/2 * G0_A @  (-G0_A_dT - H_dT@G0_A_dw - Sigma_A_dT@G0_A_dw + Sigma_A_dw @ G0_A_dT)
 
             G1_less = G0_R@Sigma_less@G1_A + 1j/2*G0_R@(
                         -G0_less_dT - H_dT @ G0_less_dw - Sigma_less_dT@G0_A_dw + Sigma_less_dw@G0_A_dT - Sigma_R_dT@G0_less_dw + Sigma_R_dw@G0_less_dT
                         )
-            G1_less_array[i] = G1_less
             #print('calculated G1',flush=True)
             #First order current matrices
-            Pi1_L = G1_less@Sigma_L_A + G1_R@Sigma_L_less - 1j/2 * G0_less_dT@Sigma_L_A_dw + 1j/2*G0_less_dw@Sigma_L_A_dT -1j/2*G0_R_dT@Sigma_L_less_dw + 1j/2*G0_R_dw@Sigma_L_less_dT
-            J1_L[i] = 1/np.pi * np.sum(np.trace(np.real(Pi1_L)*omega_weights,axis1=2,axis2=3),axis=1)
+            if side=='left' or side=='both':
+                Pi1_L = G1_less@Sigma_L_A + G1_R@Sigma_L_less - 1j/2 * G0_less_dT@Sigma_L_A_dw + 1j/2*G0_less_dw@Sigma_L_A_dT -1j/2*G0_R_dT@Sigma_L_less_dw + 1j/2*G0_R_dw@Sigma_L_less_dT
+                J1_L[i] = 1/np.pi * np.sum(np.trace(np.real(Pi1_L)*omega_weights,axis1=2,axis2=3),axis=1)
             #del(Pi1_L)
-            Pi1_R = G1_less@Sigma_R_A + G1_R@Sigma_R_less - 1j/2 * G0_less_dT@Sigma_R_A_dw + 1j/2*G0_less_dw@Sigma_R_A_dT -1j/2*G0_R_dT@Sigma_R_less_dw + 1j/2*G0_R_dw@Sigma_R_less_dT
-            J1_R[i] = 1/np.pi * np.sum(np.trace(np.real(Pi1_R)*omega_weights,axis1=2,axis2=3),axis=1)
-        self.G0_R = G0_R_array
-        self.G0_less = G0_less_array
-        self.G1_R = G1_R_array
-        self.G1_less = G1_less_array
+            if side=='right' or side=='both':
+                Pi1_R = G1_less@Sigma_R_A + G1_R@Sigma_R_less - 1j/2 * G0_less_dT@Sigma_R_A_dw + 1j/2*G0_less_dw@Sigma_R_A_dT -1j/2*G0_R_dT@Sigma_R_less_dw + 1j/2*G0_R_dw@Sigma_R_less_dT
+                J1_R[i] = 1/np.pi * np.sum(np.trace(np.real(Pi1_R)*omega_weights,axis1=2,axis2=3),axis=1)
+
+            if calc_density:
+                density0[i]=np.sum(self.omega_weights*np.imag(G0_less),axis=1)/(2*np.pi) 
+                density1[i]=np.sum(self.omega_weights*np.imag(G1_less),axis=1)/(2*np.pi) 
+            if save_arrays == 'all':
+                G0_R_array[i] = G0_R
+                G0_less_array[i] = G0_less
+                G1_R_array[i] = G1_R
+                G1_less_array[i] = G1_less
+                if side=='left' or side=='both':
+                    Pi0_L_array[i] = Pi0_L
+                    Pi1_L_array[i] = Pi1_L
+                if side=='right' or side=='both':
+                    Pi0_R_array[i] = Pi0_R
+                    Pi1_R_array[i] = Pi1_R
+            elif save_arrays== 'diag':
+                G0_R_array[i] = np.diagonal(G0_R,axis1=2,axis2=3)
+                G0_less_array[i] = np.diagonal(G0_less,axis1=2,axis2=3)
+                G1_R_array[i] = np.diagonal(G1_R,axis1=2,axis2=3)
+                G1_less_array[i] = np.diagonal(G1_less,axis1=2,axis2=3)
+                if side=='left' or side=='both':
+                    Pi0_L_array[i] = np.diagonal(Pi0_L,axis1=2,axis2=3)
+                    Pi1_L_array[i] = np.diagonal(Pi1_L,axis1=2,axis2=3)
+                if side=='right' or side=='both':
+                    Pi0_R_array[i] = np.diagonal(Pi0_R,axis1=2,axis2=3)
+                    Pi1_R_array[i] = np.diagonal(Pi1_R,axis1=2,axis2=3)
+
+
+        if calc_density:
+            self.density0 = density0
+            self.density1 = density1
+        if save_arrays == 'all' or save_arrays == 'diag':
+            self.G0_R = G0_R_array
+            self.G0_less = G0_less_array
+            self.G1_R = G1_R_array
+            self.G1_less = G1_less_array
+            if side=='left' or side=='both':
+                self.Pi0_L = Pi0_L_array
+                self.Pi1_L = Pi1_L_array
+            if side=='right' or side=='both':
+                self.Pi0_R = Pi0_R_array
+                self.Pi1_R = Pi1_R_array
+            
         if side =='left': 
             return J0_L, J1_L
         elif side=='right':
