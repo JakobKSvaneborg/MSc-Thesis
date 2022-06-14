@@ -205,32 +205,65 @@ class timescale:
             TBT_Gam_sparse_R = Test.Nonortho_Gammas[1].get_e_subset(sidx)
             TBT_Gam_R = Test.bs2np(TBT_Gam_sparse_R)[0]
             self.coupling_index_R = (np.sum(np.abs(TBT_Gam_R),axis=0) != 0) #array of size nxn containing True if site n couples to left lead, and no if not.
-            def Gamma_L(eps,i=None,j=None):
+            def Gamma_L(eps,i=None,j=None,filter_width=0.2): #narrower filter = less filtering
                 if i is None:
                     cs = CubicSpline(E.real,TBT_Gam_L,extrapolate=False)
                 else: 
                     cs = CubicSpline(E.real,TBT_Gam_L[:,i,j],extrapolate=False)
-                eps = eps.reshape(1,-1)
+                N_dims = len(np.array(eps).shape)
+                if N_dims > 2: #    remove matrix indices from eps if these are present
+                    eps = eps[:,:,0,0]
+                elif N_dims == 1:
+                    eps = eps.reshape(1,-1)
                 res = cs(eps)
                 if False: #self.eta != 0:
                     pass
                     #res = res + self.eta*np.identity(res.shape)
                 res[np.isnan(res)] = 0
-                return res# + self.eta*self.coupling_index_L
 
-            def Gamma_R(eps,i=None,j=None):
+                eps_centered = eps - eps[:,int(eps.shape[1]/2)].reshape(-1,1) #center on zero for use in the filter function
+                #eps_centered = eps_centered.reshape(1,-1,1,1)
+                Gauss_filter = np.exp(-((eps_centered/filter_width)**2/2))
+                normalization = np.sum(Gauss_filter,axis=1).reshape(-1,1)
+                Gauss_filter /= normalization
+                shape = list(Gauss_filter.shape)
+                shape.append(1)
+                shape.append(1)
+                Gauss_filter = Gauss_filter.reshape(shape)
+                F_filtered=scipy.signal.fftconvolve(res,Gauss_filter,mode='same',axes=1)
+                return F_filtered             
+                #return res# + self.eta*self.coupling_index_L
+
+            def Gamma_R(eps,i=None,j=None,filter_width=0.2): #narrower filter = less filtering
                 if i is None:
                     cs = CubicSpline(E.real,TBT_Gam_R,extrapolate=False)
                 else: 
                     cs = CubicSpline(E.real,TBT_Gam_R[:,i,j],extrapolate=False)
                 cs = CubicSpline(E.real,TBT_Gam_R,extrapolate=False)
-                eps = eps.reshape(1,-1)
+                N_dims = len(np.array(eps).shape)
+                if N_dims > 2: #    remove matrix indices from eps if these are present
+                    eps = eps[:,:,0,0]
+                elif N_dims == 1:
+                    eps = eps.reshape(1,-1)
                 res = cs(eps)
                 if False: #self.eta != 0:
                     pass
                     #res = res + self.eta*np.identity(res.shape)
                 res[np.isnan(res)] = 0
-                return res# + self.eta*self.coupling_index_R
+
+                eps_centered = eps - eps[:,int(eps.shape[1]/2)].reshape(-1,1) #center on zero for use in the filter function
+                
+                Gauss_filter = np.exp(-((eps_centered/filter_width)**2/2))
+                normalization = np.sum(Gauss_filter,axis=1).reshape(-1,1)
+                Gauss_filter /= normalization
+                shape = list(Gauss_filter.shape)
+                shape.append(1)
+                shape.append(1)
+                Gauss_filter = Gauss_filter.reshape(shape)
+                F_filtered=scipy.signal.fftconvolve(res,Gauss_filter,mode='same',axes=1)
+                return F_filtered 
+
+                #return res# + self.eta*self.coupling_index_R
 
             self.Gamma_L = Gamma_L
             self.Gamma_R = Gamma_R
@@ -745,7 +778,7 @@ class timescale:
             #print('WBL! Gamma was not callable')
 
         T=np.array(T).reshape(-1,1,1,1)
-        omega=np.array(omega).reshape(-1,1,1)   
+        omega=np.array(omega).reshape(1,-1,1,1)   
         exp = np.exp
         omega_min = omega.min()
         omega_max = omega.max()
@@ -756,7 +789,7 @@ class timescale:
         #print('extending internal arrays by ',extension_length)
         extension = dw*np.linspace(1,extension_length,extension_length)
         w = np.concatenate(((omega_min - np.flip(extension)),omega.flatten(),omega_max + extension))
-        w=w.reshape(-1,1,1)
+        w=w.reshape(1,-1,1,1)
         if np.array_equal(w,omega):
             print('w==omega, extension_length ==', extension_length)
 
