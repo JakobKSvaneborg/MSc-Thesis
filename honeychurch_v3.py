@@ -759,8 +759,8 @@ class timescale:
             #Delta_alpha = self.Delta_R
             WBL_check = self.WBL_R
         if WBL_check: #we are in the wide-band limit. For sigma_less, we just continue the calculation. 
-            Gamma_mat = Gamma
-            Gamma = lambda x : np.ones(x.shape)*Gamma_mat
+            #Gamma_mat = Gamma
+            return -1j*Gamma/2 * np.ones((omega*T).shape)
         if not callable(Gamma): #make gamma callable even in the WBL to make the syntax the same in every case.
             print('error in calc_Sigma_R: Gamma was not callable, but WBL was not specified!')
             assert 1==0
