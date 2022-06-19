@@ -96,7 +96,11 @@ class timescale:
     def __init__(self,T=None,omega_params=None,Gamma_L=(lambda x : np.eye(2)),Gamma_R=(lambda x : np.eye(2)),H=None,
                  Temperature=0.1,mu_L = 0, mu_R = 0,Delta_L = 0, Delta_R = 0, Delta = 0,
                  Vbias=(lambda t : 0),Vbias_dT=None,Vbias_int=None,
-                 use_aux_modes=False,Fermi_params=[],Lorentz_params_L=[],Lorentz_params_R=[],eta=None):
+                 use_aux_modes=False,Fermi_params=[],Lorentz_params_L=[],Lorentz_params_R=[],eta=None,
+                 potential_L=None,potential_R=None,potential=None,
+                 potential_L_dT=None,potential_R_dT=None,potential_dT=None,
+                 potential_L_int=None,potential_R_int=None,potential_int=None,
+                 V_max = 1, V_min = -1):
         #T: np.array of times
         #omega: list or nparray with syntax [omega_min, omega_max, N_omega]
         
@@ -124,19 +128,20 @@ class timescale:
         self.Delta_L = Delta_L 
         self.Delta_R = Delta_R 
         self.Delta = Delta
-        self.V_max = np.max(Vbias(T))
-        self.V_min = np.min(Vbias(T))
+        self.V_max = V_max
+        self.V_min = V_min
+        if np.max(Vbias(T)) > V_max:
+            print('Warning in __init__: max of Vbias larger than specified V_max. np.max(Vbias(T)) = %.2f, specified V_max = %.2f'%(np.max(Vbias(T)),V_max))
+        if np.min(Vbias(T)) < V_min:
+            print('Warning in __init__: min of Vbias smaller than specified V_min. np.min(Vbias(T)) = %.2f, specified V_min = %.2f'%(np.min(Vbias(T)),V_min))
         T=np.array(T).reshape(-1,1,1,1)
         self.T=T
-        if H is not None:
-            self.H = H + Delta*Vbias(T)
-            self.f_H = lambda t : (H + Delta*Vbias(t))
+        
         if Vbias_dT is None:
             if np.all(Delta == 0):
                 Vbias_dT = lambda t : np.zeros(np.array(t).shape)
             else:
                 Vbias_dT = lambda t : self.FD(Vbias,t) #numerical derivative w/ finite difference
-        self.H_dT = Delta*Vbias_dT(T)
 
         self.Vbias = Vbias
         self.Vbias_dT = Vbias_dT
@@ -168,7 +173,55 @@ class timescale:
                 eta = self.dw
             self.eta = eta
 
+        if potential is not None:
+            self.potential = potential
+        else:
+            self.potential = lambda t : Delta*Vbias(t)
+        if potential_L is not None:
+            self.potential_L = potential_L
+        else:
+            self.potential_L = lambda t : Delta_L*Vbias(t)
+        if potential_R is not None:
+            self.potential_R = potential_R
+        else:
+            self.potential_R = lambda t : Delta_R*Vbias(t)
 
+        if potential_dT is not None:
+            self.potential_dT = potential_dT
+        else:
+            self.potential_dT = lambda t : Delta*Vbias_dT(t)
+        if potential_L_dT is not None:
+            self.potential_L_dT = potential_L_dT
+        else:
+            self.potential_L_dT = lambda t : Delta_L*Vbias_dT(t)
+        if potential_R_dT is not None:
+            self.potential_R_dT = potential_R_dT
+        else:
+            self.potential_R_dT = lambda t : Delta_R*Vbias_dT(t)
+
+        if potential_int is not None:
+            self.potential_int = potential_int
+        elif Vbias_int is not None:
+            self.potential_int = lambda t : Delta*Vbias_int(t)
+        else: 
+            self.potential_int = None
+        if potential_L_int is not None:
+            self.potential_L_int = potential_L_int
+        elif Vbias_int is not None:
+            self.potential_L_int = lambda t : Delta_L*Vbias_int(t)
+        else: 
+            self.potential_L_int = None
+        if potential_R_int is not None:
+            self.potential_R_int = potential_R_int
+        elif Vbias_int is not None:
+            self.potential_R_int = lambda t : Delta_R*Vbias_int(t)
+        else: 
+            self.potential_R_int = None
+
+        if H is not None:
+            self.H = H + self.potential(T)
+            self.f_H = lambda t : (H + self.potential(t))
+        self.H_dT = self.potential_dT(T)
 
     def get_physical_params(self,Test): #Gets physical parameters (hamiltonian, chemical potentials, temperature, self-energy etc) from the TimedependentTransport object Test
         print('Running get_physical_params. Remember Delta_R, Delta_L, Delta and Vbias must be specified manually')
@@ -280,9 +333,12 @@ class timescale:
 
         def Gamma_L(eps,i=None,j=None):
             roots,complex_coefs = self.Lorentz_params_L
+            eps = np.array(eps)
+            NL = len(roots)
             if i is not None:
                 complex_coefs = complex_coefs[:,i,j]
-            NL = len(roots)
+                if len(eps.shape) > 2:
+                    eps = eps[:,:,0,0]
             res = 0
             for i in range(NL):
                 res = res + complex_coefs[i]/(eps - roots[i])# - complex_coefs[i]/(eps - np.conjugate(roots[i]))
@@ -290,9 +346,12 @@ class timescale:
             return res
         def Gamma_R(eps,i=None,j=None):
             roots,complex_coefs = self.Lorentz_params_R
+            eps = np.array(eps)
             NL = len(roots)
             if i is not None:
                 complex_coefs = complex_coefs[:,i,j]
+                if len(eps.shape) > 2:
+                    eps = eps[:,:,0,0]
             res = 0
             for i in range(NL):
                 res = res + complex_coefs[i]/(eps - roots[i])# - complex_coefs[i]/(eps - np.conjugate(roots[i]))
@@ -322,32 +381,6 @@ class timescale:
         return self.fermi(eps,alpha='L')
     def f_R(self,eps):
         return self.fermi(eps,alpha='R')
-
-    def potential_L(self,T): #Vbias is a function with syntax Vbias(T) that returns the relevant bias.
-        bias = self.Vbias(T)
-        return self.Delta_L*bias
-
-    def potential_R(self,T):
-        bias = self.Vbias(T)
-        return self.Delta_R*bias
-
-    def potential(self,T,alpha=0):
-        bias = self.Vbias(T)
-        if alpha=='L':
-            return self.Delta_L*bias
-        elif alpha=='R':
-            return self.Delta_R * bias
-        else:
-            return self.Delta*bias
-
-    def potential_dT(self,T,alpha=0):
-        bias_dT = self.Vbias_dT(T)
-        if alpha=='L':
-            return self.Delta_L*bias_dT
-        elif alpha=='R':
-            return self.Delta_R * bias_dT
-        else:
-            return self.Delta*bias_dT
 
     def Fermi_pade(self,eps,alpha='L'):
         #eps=eps.reshape(-1,1)
@@ -576,33 +609,33 @@ class timescale:
      #return np.fft.fftfreq(n,d)
         return np.fft.fftfreq(n,d)
 
-    def calc_Sigma_less(self,T=None,omega=None,alpha='L',extension_length=300): #new one with aux modes
+    def calc_Sigma_less(self,T=None,omega=None,alpha='L',derivative=0,extension_length=300,nyquist_damping=5): #new one with aux modes
+        #derivative calculates the derivative of the specified order w.r.t omega
+        #nyquist_damping: the damping of the Gaussian filter at the nyquist frequency given in standard deviations. 
+        #default corresponds to 3 standard deviations.
         if np.all(T==None):
             T=self.T
             #print('calc_Sigma_less: set T = self.T',flush=True)
         if np.all(omega==None):
             omega = self.omega
-            set_self_tau = 1
-        else: 
-            set_self_tau = 0
 
         if alpha=='L':
             f = self.f_L
             Gamma = self.Gamma_L
-            potential = self.potential_L
+            potential_int = self.potential_L_int
             Lorentz_params = self.Lorentz_params_L
             Fermi_params = self.Fermi_params_L
             coupling_index = self.coupling_index_L
-            Delta_alpha = self.Delta_L
+            #Delta_alpha = self.Delta_L
             WBL_check = self.WBL_L
         else:
             f = self.f_R
             Gamma = self.Gamma_R
-            potential = self.potential_R
+            potential_int = self.potential_R_int
             Lorentz_params = self.Lorentz_params_R
             Fermi_params = self.Fermi_params_R
             coupling_index = self.coupling_index_R
-            Delta_alpha = self.Delta_R
+            #Delta_alpha = self.Delta_R
             WBL_check = self.WBL_R
         if WBL_check: #we are in the wide-band limit. For sigma_less, we just continue the calculation. 
             Gamma_mat = Gamma
@@ -612,8 +645,8 @@ class timescale:
             assert 1==0
             #print('WBL! Gamma was not callable')
 
-        T=np.array(T).reshape(-1,1,1,1)
-        omega=np.array(omega).reshape(-1,1,1)   
+        T=np.array(T).reshape(-1,1)
+        omega=np.array(omega).reshape(1,-1)   
         exp = np.exp
         omega_min = omega.min()
         omega_max = omega.max()
@@ -623,15 +656,15 @@ class timescale:
         #extend internal arrays by extension_length. this is useful if the specified range of integration does not include the entire support of the given functions.
         extension = dw*np.linspace(1,extension_length,extension_length)
         w = np.concatenate(((omega_min - np.flip(extension)),omega.flatten(),omega_max + extension))
-        w=w.reshape(-1,1,1)
+        w=w.reshape(1,-1)
         #print('w[extension_length] == omega_min? w[ext_len]==', w[extension_length],'omega_min ==',omega_min)
         #dw_taumax = 2*np.(Tmax - Tmin)
         #Calculate range of integration needed for sufficiently fine tau sampling (dt = 2pi/(b-a)) and nyquist: 1/dt > 2*max freq
-        V_max = np.abs(Delta_alpha)*self.V_max
-        V_min = np.abs(Delta_alpha)*self.V_min
+        V_max = self.V_max
+        V_min = self.V_min
         max_freq = V_max - V_min
         if max_freq==0:
-            max_freq = 0.1
+            print('error in calc_sigma_less: V_max == V_min.')
         dtau_max = 1/(2.1*max_freq) #ensure that the tau sampling occurs above the Nyquist frequency of the "filter", exp(-\infint \Delta_\alpha ...)
         min_domain_length = 2*np.pi/dtau_max
         domain_length = max(w.max()-w.min(), min_domain_length) #We should at least include the entire range [omega_min, omega_max].
@@ -640,31 +673,37 @@ class timescale:
         #N2 = np.ceil(tau_max_for_entire_domain/(2*np.pi)*domain_length + 1)
         #N3=max(N1,N2)
         N = int(2**np.ceil(np.log(N1)/np.log(2))) #Make N a power of two for most efficient FFT. do so in a way that cannot decrease the value of N.
-        if N>1e5:
-            print("N in calc_Sigma_less larger than 100k!")
+        #if N>1e5:
+            #print("N in calc_Sigma_less larger than 100k!")
         #x = domain_length/N * np.arange(N) #generate x variable for FFT.
         x = dw*np.arange(N)
         domain_length= x.max() * N/(N-1)
-        x = x.reshape(1,-1,1,1) #shape to proper size
+        x = x.reshape(1,-1) #shape to proper size
+        
         dtau = 2*np.pi/domain_length
         tau = dtau*np.arange(N) #generate tau variable for FFT
-        tau = tau.reshape(1,-1,1,1) #reshape for use in expint.
+        tau = tau.reshape(1,-1) #reshape for use in expint.
+        
+        Nyquist_freq = tau.max()/2
+        
+        Nyquist_filter = np.exp(-(nyquist_damping*tau/Nyquist_freq)**2/2) #filter that reduces the amplitude at the Nyquist freq by 3 standard deviations of the normal distribution
+        #np.save('Nyquist_*filter',Nyquist_filter)
+        #np.save('tau',tau)
         #calculate expint
-        if self.Vbias_int is None:
+        if potential_int is None:
             expint = np.exp(-1j*self.expint3(T,tau,alpha))
         else:
-            expint = np.exp(-1j*Delta_alpha*(self.Vbias_int(T+tau/2) - self.Vbias_int(T-tau/2)))
+            expint = np.exp(-1j*(potential_int(T+tau/2) - potential_int(T-tau/2)))
 
-        expPhi = expint[0,-1,0,0] #choose largest value of tau - this is the integral of the pulse over its entire support.
         Sigma_less = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
         omega_index = slice(extension_length,(np.size(omega)+extension_length))
         if not self.use_aux_modes:
             fermi = f(x+w.min())
-            Gam = Gamma(x+w.min())
+            Gam = Gamma(x.reshape(1,-1,1,1)+w.min())
 
         for i in range(self.device_dim):
             for j in range(self.device_dim):
-                if coupling_index[i,j]:
+                if coupling_index[i,j]: #each iteration calculates one matrix element of Sigma. Variables in the loop do not carry matrix indices.
                     if self.use_aux_modes:
                         fermi_int_residues = lambda E : Gamma(E,i,j)*exp(-1j*(E)*tau)
                         Lorentz_int_residues = lambda E : self.Fermi_pade(E,alpha)*exp(-1j*(E)*tau)#f(E)*exp(-1j*(E)*taup)#
@@ -673,103 +712,81 @@ class timescale:
                         Lorentz_params_ij = [Lor_poles,Lor_res[:,i,j]]
                         fermi_int = self.int_residues2(fermi_int_residues,Fermi_params,halfplane='lower')
                         Lorentz_int = self.int_residues2(Lorentz_int_residues,Lorentz_params_ij,halfplane='lower')
-                        Sigma_less_forward = (fermi_int + Lorentz_int).reshape(1,-1)/(2*np.pi)
-                        Sigma_less_forward[:,0] /=2
-                        Sigma_less_forward = Sigma_less_forward * exp(1j*w.min()*tau[:,:,0,0])
-                        Sigma_less_backward = tau.max() * self.ifft((expint[:,:,0,0]-expPhi)* Sigma_less_forward,axis=1)
-                        fermi_residues_Sigzero = lambda E : Gamma(E,i,j)/(E-omega)
-                        Lorentz_residues_Sigzero = lambda E : self.Fermi_pade(E,alpha)/(E-omega)
-                        fermi_int_Sigzero = self.int_residues2(fermi_residues_Sigzero,Fermi_params,halfplane='lower').reshape(1,-1)
-                        Lorentz_int_Sigzero = self.int_residues2(Lorentz_residues_Sigzero,Lorentz_params_ij,halfplane='lower').reshape(1,-1)
-                        #fg = (self.Fermi_pade(omega,alpha)*Gamma(omega,i,j)).reshape(1,-1)
-                        Hilbert_trans = (fermi_int_Sigzero + Lorentz_int_Sigzero) 
-
-                        Sigma_zero = 2j*np.real(expPhi*(-1j*Hilbert_trans)/(2*np.pi))
-
-                        Sigma_less[:,:,i,j] = 2j*np.real(Sigma_less_backward[:,omega_index]) + Sigma_zero
-                        #Sigma_zero = np.real()
+                        forward_trans = (fermi_int + Lorentz_int)/(2*np.pi)
                     else:
-
                         #forward transform (energy integral)
-                        integrand = Gam[:,:,i,j]*fermi[:,:,0,0]
-                        #integrand[:,0] /= 2
-                        #integrand[:,-1] /= 2
-                        Sigma_less_forward = domain_length/(2*np.pi*N)*self.fft(integrand,axis=1)#*exp(-1j*(w.min()-omega_min)*tau[:,:,0,0]) #the last factor is only needed if the energy integral does not start at omega_min
-                        #Sigma_less_forward[:,0] /= 2
-                        #Sigma_less_forward[:,-1] /= 2
-                        #backward transform (tau integral)
-                        #Sigma_less_backward = tau.max() * self.ifft((expint[:,:,0,0]-expPhi) * Sigma_less_forward,axis=1)
-                        Sigma_less_backward = tau.max() * self.ifft((expint[:,:,0,0]-expPhi)* Sigma_less_forward,axis=1)
-                        fg=Gam[:,omega_index,i,j]*fermi[:,omega_index,0,0]
-                        Sigma_zero = 2j*np.real(expPhi*(fg/2 + 1j/2*self.hilbert(fg)))
+                        fxm = domain_length/(2*np.pi*N)*Gam[:,:,i,j]*fermi        
+                        forward_trans = self.fft(fxm,axis=1) * exp(-1j*w.min()*tau)
+                    
+                    forward_trans = forward_trans * Nyquist_filter
+                    if derivative > 0:
+                        forward_trans *= (1j*tau)**derivative
+                    forward_trans = forward_trans * expint
+                    forward_trans[:,0] /= 2
+                    back_trans = tau.max() * self.ifft(exp(1j*w.min()*tau)*forward_trans,axis=1)
 
-                        #Sigma_less_backward += expPhi*Gam[:,:,i,j]*fermi[:,:,0,0]/2 #divide by 2 because next line multiplies by 2
-                        #Sigma_less[:,:,i,j] = 2j * np.real(Sigma_less_backward[:,extension_length:(np.size(omega)+extension_length)])
-                        Sigma_less[:,:,i,j] =   2j*np.real(Sigma_less_backward[:,omega_index]) + Sigma_zero
-            #print('sigma_less: did not use aux mode! Finished in %.2f'%(t1-t0),flush=True)
+                    Sigma_less[:,:,i,j] =   2j*np.real(back_trans[:,omega_index])
 
-        return Sigma_less# + 1j*self.eta*np.identity(self.device_dim)
+        return Sigma_less
 
 
-    def calc_Sigma_R(self,T=None,omega=None,alpha='L',extension_length=300): #new one
-        
+    def calc_Sigma_R(self,T=None,omega=None,alpha='L',derivative=0,extension_length=300,nyquist_damping=5): #new one with aux modes
+        #derivative calculates the derivative of the specified order w.r.t omega
+        #nyquist_damping: the damping of the Gaussian filter at the nyquist frequency given in standard deviations. 
+        #default corresponds to 3 standard deviations.
         if np.all(T==None):
             T=self.T
-            #print('calc_Sigma_less: set T = self.T',flush=True)
+
         if np.all(omega==None):
             omega = self.omega
-            set_self_tau = 1
-        else: 
-            set_self_tau = 0
 
         if alpha=='L':
+            
             Gamma = self.Gamma_L
-            potential = self.potential_L
+            potential_int = self.potential_L_int
             Lorentz_params = self.Lorentz_params_L
+            Fermi_params = self.Fermi_params_L
             coupling_index = self.coupling_index_L
-            Delta_alpha = self.Delta_L
+            #Delta_alpha = self.Delta_L
             WBL_check = self.WBL_L
         else:
+            
             Gamma = self.Gamma_R
-            potential = self.potential_R
+            potential_int = self.potential_R_int
             Lorentz_params = self.Lorentz_params_R
+            Fermi_params = self.Fermi_params_R
             coupling_index = self.coupling_index_R
-            Delta_alpha = self.Delta_R
+            #Delta_alpha = self.Delta_R
             WBL_check = self.WBL_R
-        if WBL_check: #we are in the WBL! functional form of Sigma is known. Gamma should be a matrix, not a function
-            return -1j*np.ones(np.shape(T*omega))*Gamma/2
+        if WBL_check: #we are in the wide-band limit. For sigma_less, we just continue the calculation. 
+            Gamma_mat = Gamma
+            Gamma = lambda x : np.ones(x.shape)*Gamma_mat
         if not callable(Gamma): #make gamma callable even in the WBL to make the syntax the same in every case.
-            #Gamma_mat = Gamma
-            print('error in calc_Sigma_R: Gamma must be a function, or WBL must be specified!')
-            #Gamma = lambda x : Gamma_mat
+            print('error in calc_Sigma_R: Gamma was not callable, but WBL was not specified!')
+            assert 1==0
             #print('WBL! Gamma was not callable')
 
-        T=np.array(T).reshape(-1,1,1,1)
-        omega=np.array(omega).reshape(-1,1,1)   
+        T=np.array(T).reshape(-1,1)
+        omega=np.array(omega).reshape(1,-1)   
         exp = np.exp
         omega_min = omega.min()
         omega_max = omega.max()
         dw = (omega_max - omega_min)/(np.size(omega)-1)
-        #extension_length = 50
         #if extension_length < np.size(omega)/4:
         #    extension_length = int(np.size(omega)/4)
-        #print('extending internal arrays by ',extension_length)
+        #extend internal arrays by extension_length. this is useful if the specified range of integration does not include the entire support of the given functions.
         extension = dw*np.linspace(1,extension_length,extension_length)
         w = np.concatenate(((omega_min - np.flip(extension)),omega.flatten(),omega_max + extension))
-        w=w.reshape(-1,1,1)
-        if np.array_equal(w,omega):
-            print('w==omega, extension_length ==', extension_length)
-
-        #w=omega
+        w=w.reshape(1,-1)
+        #print('w[extension_length] == omega_min? w[ext_len]==', w[extension_length],'omega_min ==',omega_min)
         #dw_taumax = 2*np.(Tmax - Tmin)
         #Calculate range of integration needed for sufficiently fine tau sampling (dt = 2pi/(b-a)) and nyquist: 1/dt > 2*max freq
-        V_max = np.abs(Delta_alpha)*self.V_max
-        V_min = np.abs(Delta_alpha)*self.V_min
+        V_max = self.V_max
+        V_min = self.V_min
         max_freq = V_max - V_min
         if max_freq==0:
-            max_freq = 0.1
-        dtau_max = 1/(2.1*max_freq)
-        dtau_max = 1/(2*max_freq)
+            print('error in calc_sigma_less: V_max == V_min.')
+        dtau_max = 1/(2.1*max_freq) #ensure that the tau sampling occurs above the Nyquist frequency of the "filter", exp(-\infint \Delta_\alpha ...)
         min_domain_length = 2*np.pi/dtau_max
         domain_length = max(w.max()-w.min(), min_domain_length) #We should at least include the entire range [omega_min, omega_max].
         N1 = np.ceil(domain_length/dw) 
@@ -777,102 +794,61 @@ class timescale:
         #N2 = np.ceil(tau_max_for_entire_domain/(2*np.pi)*domain_length + 1)
         #N3=max(N1,N2)
         N = int(2**np.ceil(np.log(N1)/np.log(2))) #Make N a power of two for most efficient FFT. do so in a way that cannot decrease the value of N.
+        #if N>1e5:
+        #    print("N in calc_Sigma_R larger than 100k!")
         #x = domain_length/N * np.arange(N) #generate x variable for FFT.
         x = dw*np.arange(N)
-        x = x.reshape(1,-1,1,1) #shape to proper size
-        domain_length = x.max() * N/(N-1)
+        domain_length= x.max() * N/(N-1)
+        x = x.reshape(1,-1) #shape to proper size
+        
         dtau = 2*np.pi/domain_length
         tau = dtau*np.arange(N) #generate tau variable for FFT
-        tau = tau.reshape(1,-1,1,1) #reshape for use in expint.
+        tau = tau.reshape(1,-1) #reshape for use in expint.
+        
+        Nyquist_freq = tau.max()/2
+        
+        Nyquist_filter = np.exp(-(nyquist_damping*tau/Nyquist_freq)**2/2) #filter that reduces the amplitude at the Nyquist freq by 3 standard deviations of the normal distribution
+        #np.save('Nyquist_*filter',Nyquist_filter)
+        #np.save('tau',tau)
         #calculate expint
-        if self.Vbias_int is None:
+        if potential_int is None:
             expint = np.exp(-1j*self.expint3(T,tau,alpha))
         else:
-            expint = np.exp(-1j*Delta_alpha*(self.Vbias_int(T+tau/2) - self.Vbias_int(T-tau/2)))
-        expPhi = expint[0,-1,0,0] #choose largest value of tau - this is the integral of the pulse over its entire support.
+            expint = np.exp(-1j*(potential_int(T+tau/2) - potential_int(T-tau/2)))
+
         Sigma_R = np.zeros((np.size(T),np.size(omega),self.device_dim,self.device_dim),dtype=np.complex128)
-        #extension_length=100
-        if not self.use_aux_modes:
-            Gam = Gamma(x+w.min())
         omega_index = slice(extension_length,(np.size(omega)+extension_length))
+        if not self.use_aux_modes:
+            Gam = Gamma(x.reshape(1,-1,1,1)+w.min())
+
         for i in range(self.device_dim):
             for j in range(self.device_dim):
-                if coupling_index[i,j]:
+                if coupling_index[i,j]: #each iteration calculates one matrix element of Sigma. Variables in the loop do not carry matrix indices.
                     if self.use_aux_modes:
                         Lorentz_int_residues = lambda E : exp(-1j*(E)*tau)#f(E)*exp(-1j*(E)*taup)#
+
                         Lor_poles, Lor_res = Lorentz_params
                         Lorentz_params_ij = [Lor_poles,Lor_res[:,i,j]]
                         Lorentz_int = self.int_residues2(Lorentz_int_residues,Lorentz_params_ij,halfplane='lower')
-                        Sigma_R_forward = Lorentz_int.reshape(1,-1)/(2*np.pi)
-                        Sigma_R_forward = Sigma_R_forward * exp(1j*w.min()*tau[:,:,0,0])
-                        #Sigma_R_forward[:,0] /= 2
-                        #Sigma_R_forward[:,-1] /= 2
-                        Sigma_R_backward = -1j*tau.max() * self.ifft((expint[:,:,0,0]-expPhi)* Sigma_R_forward,axis=1)
-                        Lorentz_residues_Sigzero = lambda E : 1/(omega-E)
-                        Hilbert_trans = self.int_residues2(Lorentz_residues_Sigzero,Lorentz_params_ij,halfplane='lower').reshape(1,-1)
-                        Sigma_zero = -1j*expPhi*(0*Gamma(omega,i,j).reshape(1,-1)/2 + 1j*Hilbert_trans/(2*np.pi) ).reshape(1,-1)
-                        Sigma_R[:,:,i,j] =  Sigma_R_backward[:,omega_index] +Sigma_zero
+                        forward_trans = Lorentz_int/(2*np.pi)
                     else:
-                    #forward transform (energy integral)
-                        integrand = Gam[:,:,i,j]
-                        #integrand[:,0] /= 2
-                        #integrand[:,-1] /= 2
-                        Sigma_R_forward = domain_length/(2*np.pi*N)*self.fft(integrand,axis=1)#*exp(-1j*(w.min()-omega_min)*tau[:,:,0,0]) #this factor is only needed if the energy integral does not start at omega_min
-                        #Sigma_R_forward[:,0] /= 2
-                        #Sigma_R_forward[:,-1] /= 2
-                        #backward transform (tau integral)
-                        Sigma_R_backward = tau.max() * self.ifft((expint[:,:,0,0]-expPhi) * Sigma_R_forward,axis=1)
+                        #forward transform (energy integral)
+                        fxm = domain_length/(2*np.pi*N)*Gam[:,:,i,j]
+                        forward_trans = self.fft(fxm,axis=1) * exp(-1j*w.min()*tau)
+                    
+                    forward_trans = forward_trans * Nyquist_filter
+                    if derivative > 0:
+                        forward_trans *= (1j*tau)**derivative
+                    forward_trans = forward_trans * expint
+                    forward_trans[:,0] /= 2
+                    back_trans = tau.max() * self.ifft(exp(1j*w.min()*tau)*forward_trans,axis=1)
 
-                        Sigma_R_backward = -1j*Sigma_R_backward[:,omega_index]
-                        #print('Sigma_R_backward_shape',Sigma_R_backward.shape)
-                        Sigma_R[:,:,i,j] =   Sigma_R_backward - expPhi*(1j*Gam[:,omega_index,i,j]/2 - 1/2*self.hilbert(Gam[:,omega_index,i,j],axis=1))#
+                    Sigma_R[:,:,i,j] =   -1j*back_trans[:,omega_index]
+
         return Sigma_R
     
 
-    """ #deprecated
-    def calc_Sigma(self,T=None,omega=None):
-        if T is None:
-            T = self.T
-        if omega is None:
-            omega = self.omega
-
-        if self.WBL_R:
-            Sigma_R_R = -1j*np.ones(np.shape(T*omega))*self.Gamma_R/2
-            #print('calculated sigma_R_R in the WBL',flush=True)
-        else:
-            Sigma_R_R = self.calc_Sigma_R(T,omega,alpha='R')
-        if self.WBL_L:
-            Sigma_L_R = -1j*np.ones(np.shape(T*omega))*self.Gamma_L/2
-            #print('calculated sigma_L_R in the WBL',flush=True)
-        else:
-            Sigma_L_R = self.calc_Sigma_R(T,omega,alpha='L')
-        Sigma_L_less = self.calc_Sigma_less(T,omega,alpha='L')
-        Sigma_R_less = self.calc_Sigma_less(T,omega,alpha='R')
-        Sigma_L_A = np.conjugate(Sigma_L_R)
-        Sigma_R_A = np.conjugate(Sigma_R_R)
-
-        #Total self energies
-        Sigma_R = Sigma_R_R + Sigma_L_R
-        Sigma_A = Sigma_R_A + Sigma_L_A
-        Sigma_less = Sigma_L_less + Sigma_R_less
-
-        self.Sigma_R_less  = Sigma_R_less  
-        self.Sigma_L_less  = Sigma_L_less  
-        self.Sigma_L_R  = Sigma_L_R  
-        self.Sigma_L_A  = Sigma_L_A  
-        self.Sigma_R_R  = Sigma_R_R  
-        self.Sigma_R_A  = Sigma_R_A  
-        self.Sigma_R  = Sigma_R  
-        self.Sigma_A  = Sigma_A  
-        self.Sigma_less  = Sigma_less  
-        
-        return [Sigma_L_R,Sigma_R_R,Sigma_L_less,Sigma_R_less]
-    """
-
-
-
-
-    def calc_current(self,T=None,omega=None,side='left',eta=0,calc_density=False,save_arrays='none'):
+    def calc_current(self,T=None,omega=None,side='left',eta=0,calc_density=False,save_arrays='none',nyquist_damping=5):
         #save_arrays specifies whether to save the internal arrays. Currently just set to save the Green's functions and current matrices. 
         #save_arrays may be set to 'all', 'diag' or 'none' depending on whether you want to save the entire arrays, their diagonals, or not at all
         deriv = self.FD
@@ -888,10 +864,10 @@ class timescale:
             omega_weights = list(omega_weights)
             omega_weights.append(omega_weights[-1]/2)
             omega_weights = np.array(omega_weights).reshape(np.shape(omega))
-        f_Sigma_L_R = lambda t : self.calc_Sigma_R(t,omega,alpha='L')
-        f_Sigma_R_R = lambda t : self.calc_Sigma_R(t,omega,alpha='R')
-        f_Sigma_L_less = lambda t : self.calc_Sigma_less(t,omega,alpha='L')
-        f_Sigma_R_less = lambda t : self.calc_Sigma_less(t,omega,alpha='R')
+        f_Sigma_L_R = lambda t : self.calc_Sigma_R(t,omega,alpha='L',nyquist_damping=nyquist_damping)
+        f_Sigma_R_R = lambda t : self.calc_Sigma_R(t,omega,alpha='R',nyquist_damping=nyquist_damping)
+        f_Sigma_L_less = lambda t : self.calc_Sigma_less(t,omega,alpha='L',nyquist_damping=nyquist_damping)
+        f_Sigma_R_less = lambda t : self.calc_Sigma_less(t,omega,alpha='R',nyquist_damping=nyquist_damping)
         J0_L = np.zeros(len(T))
         J1_L = np.zeros(len(T))
         J0_R = np.zeros(len(T))
@@ -940,15 +916,15 @@ class timescale:
             Sigma_R_A_dT = np.conjugate(Sigma_R_R_dT)
 
             #functions to calculate derivatives wrt omega
-            fw_Sigma_L_R = lambda w : self.calc_Sigma_R(t,w,alpha='L')
-            fw_Sigma_R_R = lambda w : self.calc_Sigma_R(t,w,alpha='R')
-            fw_Sigma_L_less = lambda w : self.calc_Sigma_less(t,w,alpha='L')
-            fw_Sigma_R_less = lambda w : self.calc_Sigma_less(t,w,alpha='R')
+            #fw_Sigma_L_R = lambda w : self.calc_Sigma_R(t,w,alpha='L',nyquist_damping=nyquist_damping)
+            #fw_Sigma_R_R = lambda w : self.calc_Sigma_R(t,w,alpha='R',nyquist_damping=nyquist_damping)
+            #fw_Sigma_L_less = lambda w : self.calc_Sigma_less(t,w,alpha='L',nyquist_damping=nyquist_damping)
+            #fw_Sigma_R_less = lambda w : self.calc_Sigma_less(t,w,alpha='R',nyquist_damping=nyquist_damping)
 
-            Sigma_L_less_dw = deriv(fw_Sigma_L_less ,omega,dx=1e-6)
-            Sigma_R_less_dw = deriv(fw_Sigma_R_less ,omega,dx=1e-6)
-            Sigma_L_R_dw = deriv(fw_Sigma_L_R ,omega,dx=1e-6)
-            Sigma_R_R_dw = deriv(fw_Sigma_R_R ,omega,dx=1e-6)
+            Sigma_L_less_dw = self.calc_Sigma_less(t,omega,alpha='L',derivative=1,nyquist_damping=nyquist_damping)
+            Sigma_R_less_dw = self.calc_Sigma_less(t,omega,alpha='R',derivative=1,nyquist_damping=nyquist_damping)
+            Sigma_L_R_dw = self.calc_Sigma_R(t,omega,alpha='L',derivative=1,nyquist_damping=nyquist_damping)
+            Sigma_R_R_dw = self.calc_Sigma_R(t,omega,alpha='R',derivative=1,nyquist_damping=nyquist_damping)
             
             Sigma_L_A_dw = np.conjugate(Sigma_L_R_dw)
             Sigma_R_A_dw = np.conjugate(Sigma_R_R_dw)
@@ -1156,10 +1132,10 @@ class timescale:
             t = T[i].reshape(1,1,1,1)
             H =  self.H[i]
             H_dT = self.H_dT[i]
-            Psi_L = 2*self.Delta_L/Omega*np.cos(Omega*t)
-            Psi_R = 2*self.Delta_R/Omega*np.cos(Omega*t)
-            Psi_L_dT = -2*self.Delta_L *np.sin(Omega*t)
-            Psi_R_dT = -2*self.Delta_R *np.sin(Omega*t)
+            Psi_L = 2/Omega*self.potential_L(t)
+            Psi_R = 2/Omega*self.potential_R(t)
+            Psi_L_dT = 2/Omega*self.potential_L_dT(t)
+            Psi_R_dT = -2/Omega*self.potential_R_dT(t)
 
             Sigma_L_R = 0
             Sigma_R_R = 0
